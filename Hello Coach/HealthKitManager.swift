@@ -53,14 +53,15 @@ class HealthKitManager {
         let metadata: [String: Any] = [
             HKMetadataKeyExternalUUID: session.id.uuidString,
             "totalReps": session.totalReps,
-            "totalSets": session.setCount,
-            "exerciseType": "bicepCurl"
+            "totalSets": session.totalSets,
+            "sessionType": session.type.rawValue,
+            "exercises": session.exerciseSummary
         ]
         try await builder.addMetadata(metadata)
 
         // Finalize and save to the HealthKit store
         if let workout = try await builder.finishWorkout() {
-            print("[HealthKit] Saved workout — Reps: \(session.totalReps), Sets: \(session.setCount), ID: \(workout.uuid)")
+            print("[HealthKit] Saved workout — Reps: \(session.totalReps), Sets: \(session.totalSets), ID: \(workout.uuid)")
         } else {
             print("[HealthKit] Workout saved (no workout object returned)")
         }
