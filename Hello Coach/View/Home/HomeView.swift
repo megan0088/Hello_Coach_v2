@@ -3,21 +3,21 @@ import Charts
 
 struct HomeView: View {
 
-    @Environment(WorkoutStore.self) private var store
+    @Environment(HomeViewModel.self) private var vm
     @EnvironmentObject private var watchSession: PhoneSessionManager
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    if store.isWorkoutActive {
+                    if vm.isWorkoutActive {
                         activeWorkoutCard
                     } else {
                         streakCard
                         startSessionCTA
                     }
                     weeklyVolumeCard
-                    if !store.trackedExercises.isEmpty {
+                    if !vm.trackedExercises.isEmpty {
                         recentPRsSection
                     }
                 }
@@ -40,25 +40,23 @@ struct HomeView: View {
         Circle()
             .fill(watchSession.isWatchReachable ? Color.green : Color.secondary.opacity(0.4))
             .frame(width: 10, height: 10)
-            .overlay(
-                Circle().strokeBorder(.background, lineWidth: 1.5)
-            )
+            .overlay(Circle().strokeBorder(.background, lineWidth: 1.5))
     }
 
     // MARK: - Streak Card
 
     private var streakCard: some View {
         HStack(spacing: 14) {
-            Text(store.currentStreak > 0 ? "🔥" : "💤")
+            Text(vm.currentStreak > 0 ? "🔥" : "💤")
                 .font(.largeTitle)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(store.currentStreak > 0
-                     ? "\(store.currentStreak) day streak"
+                Text(vm.currentStreak > 0
+                     ? "\(vm.currentStreak) day streak"
                      : "No active streak")
                     .font(.title3.weight(.bold))
 
-                if let last = store.lastSession {
+                if let last = vm.lastSession {
                     Text("Last: \(last.startTime, format: .relative(presentation: .named)) · \(last.type.rawValue)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -77,7 +75,7 @@ struct HomeView: View {
                 .fill(Color(.secondarySystemBackground))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20)
-                        .strokeBorder(Color.orange.opacity(store.currentStreak > 0 ? 0.35 : 0), lineWidth: 1)
+                        .strokeBorder(Color.orange.opacity(vm.currentStreak > 0 ? 0.35 : 0), lineWidth: 1)
                 )
         )
     }
@@ -119,7 +117,7 @@ struct HomeView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.red)
                 Spacer()
-                Text(store.currentSession?.type.rawValue.uppercased() ?? "")
+                Text(vm.currentSession?.type.rawValue.uppercased() ?? "")
                     .font(.system(size: 10, weight: .bold))
                     .tracking(1)
                     .foregroundStyle(.orange)
@@ -129,23 +127,23 @@ struct HomeView: View {
             }
 
             HStack(spacing: 0) {
-                StatCell(label: "Reps", value: "\(store.liveRepCount)")
+                StatCell(label: "Reps", value: "\(vm.liveRepCount)")
                 Divider().frame(height: 40)
-                StatCell(label: "Sets", value: "\(store.currentSession?.totalSets ?? 0)")
+                StatCell(label: "Sets", value: "\(vm.currentSession?.totalSets ?? 0)")
                 Divider().frame(height: 40)
                 StatCell(label: "Volume", value: {
-                    let v = Double(store.liveRepCount) * store.activeWeightKg
+                    let v = Double(vm.liveRepCount) * vm.activeWeightKg
                     return v > 0 ? String(format: "%.0f kg", v) : "—"
                 }())
             }
 
-            if let exercise = store.activeExercise {
+            if let exercise = vm.activeExercise {
                 HStack {
                     Text(exercise.displayName)
                         .font(.subheadline.weight(.medium))
                     Spacer()
-                    if store.activeWeightKg > 0 {
-                        Text(String(format: "%.0f kg", store.activeWeightKg))
+                    if vm.activeWeightKg > 0 {
+                        Text(String(format: "%.0f kg", vm.activeWeightKg))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -161,7 +159,7 @@ struct HomeView: View {
     // MARK: - Weekly Volume Chart
 
     private var weeklyVolumeCard: some View {
-        let data = store.weeklyVolume()
+        let data = vm.weeklyVolume()
         let total = data.reduce(0.0) { $0 + $1.volume }
 
         return VStack(alignment: .leading, spacing: 12) {
@@ -195,9 +193,7 @@ struct HomeView: View {
                 }
             }
             .chartYAxis(.hidden)
-            .chartPlotStyle { plot in
-                plot.background(Color.clear)
-            }
+            .chartPlotStyle { plot in plot.background(Color.clear) }
         }
         .padding(16)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
@@ -213,8 +209,8 @@ struct HomeView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    ForEach(store.trackedExercises.prefix(8)) { exercise in
-                        if let pr = store.personalRecord(for: exercise) {
+                    ForEach(vm.trackedExercises.prefix(8)) { exercise in
+                        if let pr = vm.personalRecord(for: exercise) {
                             PRCard(exercise: exercise, pr: pr)
                         }
                     }
@@ -226,71 +222,9 @@ struct HomeView: View {
     }
 }
 
-// MARK: - PR Card
-
-struct PRCard: View {
-    let exercise: Exercise
-    let pr: RepSet
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 4) {
-                Image(systemName: "trophy.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.orange)
-                Text(exercise.subgroup.uppercased())
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.orange)
-                    .tracking(0.5)
-            }
-
-            Text(exercise.displayName)
-                .font(.caption.weight(.semibold))
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(String(format: "%.0f", pr.weightKg))
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                Text("kg")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("×\(pr.reps) · \(pr.timestamp, format: .relative(presentation: .named))")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .padding(12)
-        .frame(width: 140, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
-    }
-}
-
-// MARK: - Stat Cell (shared helper)
-
-struct StatCell: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Text(value)
-                .font(.title3.bold())
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
 #Preview {
+    let store = WorkoutStore.preview
     HomeView()
-        .environment(WorkoutStore())
+        .environment(HomeViewModel(store: store))
         .environmentObject(PhoneSessionManager())
 }

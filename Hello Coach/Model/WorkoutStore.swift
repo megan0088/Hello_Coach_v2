@@ -1,82 +1,6 @@
 import Foundation
 import Observation
-
-// MARK: - RepSet
-
-struct RepSet: Identifiable, Codable, Hashable {
-    let id: UUID
-    let reps: Int
-    let weightKg: Double
-    let timestamp: Date
-
-    init(reps: Int, weightKg: Double, timestamp: Date = Date()) {
-        self.id = UUID()
-        self.reps = reps
-        self.weightKg = weightKg
-        self.timestamp = timestamp
-    }
-
-    var volume: Double { Double(reps) * weightKg }
-}
-
-// MARK: - ExerciseEntry
-
-struct ExerciseEntry: Identifiable, Codable, Hashable {
-    let id: UUID
-    let exercise: Exercise
-    var sets: [RepSet]
-
-    init(exercise: Exercise) {
-        self.id = UUID()
-        self.exercise = exercise
-        self.sets = []
-    }
-
-    var totalReps: Int    { sets.reduce(0) { $0 + $1.reps } }
-    var totalVolume: Double { sets.reduce(0) { $0 + $1.volume } }
-    var setCount: Int     { sets.count }
-
-    /// Best set by volume (reps × weight).
-    var bestSet: RepSet?  { sets.max(by: { $0.volume < $1.volume }) }
-}
-
-// MARK: - WorkoutSession
-
-struct WorkoutSession: Identifiable, Codable, Hashable {
-    let id: UUID
-    let type: ExerciseCategory
-    var entries: [ExerciseEntry]
-    let startTime: Date
-    var endTime: Date?
-
-    init(type: ExerciseCategory) {
-        self.id = UUID()
-        self.type = type
-        self.entries = []
-        self.startTime = Date()
-    }
-
-    var totalReps: Int      { entries.reduce(0) { $0 + $1.totalReps } }
-    var totalVolume: Double { entries.reduce(0) { $0 + $1.totalVolume } }
-    var totalSets: Int      { entries.reduce(0) { $0 + $1.setCount } }
-
-    var duration: TimeInterval? {
-        guard let end = endTime else { return nil }
-        return end.timeIntervalSince(startTime)
-    }
-
-    var formattedDuration: String {
-        guard let d = duration else { return "--" }
-        let m = Int(d) / 60
-        let s = Int(d) % 60
-        return String(format: "%d:%02d", m, s)
-    }
-
-    /// Short summary of exercises performed, e.g. "Bench Press, Lateral Raise"
-    var exerciseSummary: String {
-        entries.map { $0.exercise.displayName }.joined(separator: ", ")
-    }
-}
+import SwiftData
 
 // MARK: - WorkoutStore
 
@@ -87,28 +11,43 @@ class WorkoutStore {
 
     var currentSession: WorkoutSession?
     var isWorkoutActive: Bool = false
-
-    /// Exercise currently being performed on the Watch.
     var activeExercise: Exercise?
-    /// Weight set for the current exercise.
     var activeWeightKg: Double = 0
-    /// Live rep count mirrored from Watch.
     var liveRepCount: Int = 0
 
     // MARK: History
 
-    var completedSessions: [WorkoutSession] = []
+    private(set) var completedSessions: [WorkoutSession] = []
 
-    // MARK: Last used weight per exercise (persisted across launches)
+    // MARK: Last used weight per exercise
 
     private(set) var lastUsedWeight: [String: Double] = {
         (UserDefaults.standard.dictionary(forKey: "lastUsedWeight") as? [String: Double]) ?? [:]
     }()
 
+    // MARK: SwiftData
+
+    private let modelContext: ModelContext
+
+    init(modelContext: ModelContext) {
+        self.modelContext = modelContext
+        fetchSessions()
+    }
+
+    private func fetchSessions() {
+        let descriptor = FetchDescriptor<WorkoutSession>(
+            predicate: #Predicate { $0.endTime != nil },
+            sortBy: [SortDescriptor(\.startTime, order: .forward)]
+        )
+        completedSessions = (try? modelContext.fetch(descriptor)) ?? []
+    }
+
     // MARK: - Session lifecycle
 
     func startWorkout(type: ExerciseCategory) {
-        currentSession = WorkoutSession(type: type)
+        let session = WorkoutSession(type: type)
+        modelContext.insert(session)
+        currentSession = session
         liveRepCount = 0
         isWorkoutActive = true
     }
@@ -117,9 +56,8 @@ class WorkoutStore {
         guard isWorkoutActive else { return }
         finalizeCurrentSet()
         currentSession?.endTime = Date()
-        if let session = currentSession {
-            completedSessions.append(session)
-        }
+        try? modelContext.save()
+        fetchSessions()
         currentSession = nil
         isWorkoutActive = false
         liveRepCount = 0
@@ -134,9 +72,10 @@ class WorkoutStore {
         activeWeightKg = weightKg
         liveRepCount = 0
 
-        // Add a new entry only if this is a different exercise from the last one.
         if currentSession?.entries.last?.exercise != exercise {
-            currentSession?.entries.append(ExerciseEntry(exercise: exercise))
+            let entry = ExerciseEntry(exercise: exercise)
+            modelContext.insert(entry)
+            currentSession?.entries.append(entry)
         }
     }
 
@@ -146,10 +85,10 @@ class WorkoutStore {
         liveRepCount = count
     }
 
-    /// Saves current liveRepCount as a completed set and resets the counter.
     func finalizeCurrentSet() {
         guard let exercise = activeExercise, liveRepCount > 0 else { return }
         let newSet = RepSet(reps: liveRepCount, weightKg: activeWeightKg)
+        modelContext.insert(newSet)
         if let idx = currentSession?.entries.lastIndex(where: { $0.exercise == exercise }) {
             currentSession?.entries[idx].sets.append(newSet)
         }
@@ -180,7 +119,6 @@ class WorkoutStore {
         var streak = 0
         var expected = calendar.startOfDay(for: Date())
 
-        // Allow streak to start from yesterday if no session today yet.
         if !days.contains(expected) {
             guard let yesterday = calendar.date(byAdding: .day, value: -1, to: expected),
                   days.contains(yesterday) else { return 0 }
@@ -200,7 +138,6 @@ class WorkoutStore {
 
     // MARK: - Analytics: Personal Records
 
-    /// Best set (by volume) for a given exercise across all history.
     func personalRecord(for exercise: Exercise) -> RepSet? {
         completedSessions
             .flatMap { $0.entries }
@@ -209,7 +146,6 @@ class WorkoutStore {
             .max(by: { $0.volume < $1.volume })
     }
 
-    /// All exercises that have at least one recorded set, sorted by most recent.
     var trackedExercises: [Exercise] {
         var seen: [Exercise] = []
         for session in completedSessions.reversed() {
@@ -222,7 +158,6 @@ class WorkoutStore {
 
     // MARK: - Analytics: Weekly Volume
 
-    /// Total volume (reps × kg) grouped by day for the past 7 days.
     func weeklyVolume() -> [(day: Date, volume: Double)] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
@@ -237,8 +172,6 @@ class WorkoutStore {
 
     // MARK: - Analytics: Muscle Focus
 
-    /// Distribution of muscle groups across given sessions (default: all history).
-    /// Primary muscle = 1.0 point, Secondary = 0.5 point.
     func muscleFocus(in sessions: [WorkoutSession]? = nil) -> [(muscle: MuscleGroup, percentage: Double)] {
         let target = sessions ?? completedSessions
         var counts: [MuscleGroup: Double] = [:]
@@ -264,7 +197,6 @@ class WorkoutStore {
 
     // MARK: - Analytics: Progress per Exercise
 
-    /// All sets for a given exercise sorted by date, for the progress line chart.
     func history(for exercise: Exercise) -> [(date: Date, totalVolume: Double, totalReps: Int)] {
         completedSessions
             .filter { $0.entries.contains(where: { $0.exercise == exercise }) }
@@ -289,5 +221,18 @@ class WorkoutStore {
 
     func hasSession(on date: Date) -> Bool {
         !sessions(on: date).isEmpty
+    }
+}
+
+// MARK: - Preview Helper
+
+extension WorkoutStore {
+    static var preview: WorkoutStore {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try! ModelContainer(
+            for: WorkoutSession.self, ExerciseEntry.self, RepSet.self,
+            configurations: config
+        )
+        return WorkoutStore(modelContext: container.mainContext)
     }
 }

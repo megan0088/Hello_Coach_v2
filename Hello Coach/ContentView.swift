@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
 
-    @State private var store = WorkoutStore()
+    @Environment(WorkoutStore.self) private var store
     @StateObject private var watchSession = PhoneSessionManager()
     private let healthKit = HealthKitManager()
 
@@ -17,7 +17,6 @@ struct ContentView: View {
             CalendarView()
                 .tabItem { Label("Calendar", systemImage: "calendar") }
         }
-        .environment(store)
         .environmentObject(watchSession)
         .task { try? await healthKit.requestAuthorization() }
         .onAppear { wireCallbacks() }
@@ -51,5 +50,10 @@ struct ContentView: View {
 }
 
 #Preview {
+    let store = WorkoutStore.preview
     ContentView()
+        .environment(store)
+        .environment(HomeViewModel(store: store))
+        .environment(AnalyticsViewModel(store: store))
+        .environment(CalendarViewModel(store: store))
 }

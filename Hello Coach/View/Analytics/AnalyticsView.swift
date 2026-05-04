@@ -3,41 +3,9 @@ import Charts
 
 struct AnalyticsView: View {
 
-    @Environment(WorkoutStore.self) private var store
-
-    @State private var selectedExercise: Exercise?
-    @State private var timeRange: TimeRange = .sixMonths
-
-    enum TimeRange: String, CaseIterable {
-        case oneMonth    = "1M"
-        case threeMonths = "3M"
-        case sixMonths   = "6M"
-        case oneYear     = "1Y"
-        case all         = "ALL"
-
-        var days: Int? {
-            switch self {
-            case .oneMonth:    return 30
-            case .threeMonths: return 90
-            case .sixMonths:   return 180
-            case .oneYear:     return 365
-            case .all:         return nil
-            }
-        }
-    }
+    @Environment(AnalyticsViewModel.self) private var vm
 
     private let musclePalette: [Color] = [.orange, .blue, .green, .purple, .red]
-
-    private var currentExercise: Exercise {
-        selectedExercise ?? store.trackedExercises.first ?? .benchPress
-    }
-
-    private var filteredHistory: [(date: Date, totalVolume: Double, totalReps: Int)] {
-        let history = store.history(for: currentExercise)
-        guard let days = timeRange.days else { return history }
-        let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
-        return history.filter { $0.date >= cutoff }
-    }
 
     var body: some View {
         NavigationStack {
@@ -65,7 +33,7 @@ struct AnalyticsView: View {
                 Section(category.rawValue) {
                     ForEach(Exercise.exercises(for: category)) { exercise in
                         Button(exercise.displayName) {
-                            withAnimation { selectedExercise = exercise }
+                            withAnimation { vm.selectedExercise = exercise }
                         }
                     }
                 }
@@ -73,11 +41,11 @@ struct AnalyticsView: View {
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(currentExercise.subgroup.uppercased())
+                    Text(vm.currentExercise.subgroup.uppercased())
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.orange)
                         .tracking(0.5)
-                    Text(currentExercise.displayName)
+                    Text(vm.currentExercise.displayName)
                         .font(.headline)
                         .foregroundStyle(.primary)
                 }
@@ -96,17 +64,17 @@ struct AnalyticsView: View {
 
     private var timeRangePicker: some View {
         HStack(spacing: 0) {
-            ForEach(TimeRange.allCases, id: \.self) { range in
+            ForEach(AnalyticsViewModel.TimeRange.allCases, id: \.self) { range in
                 Button {
-                    withAnimation(.spring(response: 0.25)) { timeRange = range }
+                    withAnimation(.spring(response: 0.25)) { vm.timeRange = range }
                 } label: {
                     Text(range.rawValue)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(timeRange == range ? .white : .secondary)
+                        .foregroundStyle(vm.timeRange == range ? .white : .secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                         .background(
-                            timeRange == range ? Color.orange : Color.clear,
+                            vm.timeRange == range ? Color.orange : Color.clear,
                             in: RoundedRectangle(cornerRadius: 10)
                         )
                 }
@@ -127,7 +95,7 @@ struct AnalyticsView: View {
                     Text("Volume Progress")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    if let last = filteredHistory.last {
+                    if let last = vm.filteredHistory.last {
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
                             Text(String(format: "%.0f", last.totalVolume))
                                 .font(.title2.weight(.bold))
@@ -142,7 +110,7 @@ struct AnalyticsView: View {
                     }
                 }
                 Spacer()
-                if let change = volumeChangeLabel {
+                if let change = vm.volumeChangeLabel {
                     Text(change)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.green)
@@ -168,7 +136,7 @@ struct AnalyticsView: View {
 
     @ViewBuilder
     private var chartView: some View {
-        if filteredHistory.isEmpty {
+        if vm.filteredHistory.isEmpty {
             Chart(Self.ghostData, id: \.date) { item in
                 LineMark(x: .value("Date", item.date), y: .value("Volume", item.totalVolume))
                     .foregroundStyle(Color.secondary.opacity(0.2))
@@ -192,7 +160,7 @@ struct AnalyticsView: View {
                 }
             }
         } else {
-            Chart(filteredHistory, id: \.date) { item in
+            Chart(vm.filteredHistory, id: \.date) { item in
                 LineMark(
                     x: .value("Date", item.date),
                     y: .value("Volume", item.totalVolume)
@@ -229,19 +197,10 @@ struct AnalyticsView: View {
         }
     }
 
-    private var volumeChangeLabel: String? {
-        guard filteredHistory.count >= 2,
-              let first = filteredHistory.first?.totalVolume,
-              let last  = filteredHistory.last?.totalVolume,
-              first > 0 else { return nil }
-        let pct = ((last - first) / first) * 100
-        return String(format: "%+.0f%%", pct)
-    }
-
     // MARK: - Weekly Volume
 
     private var weeklyVolumeCard: some View {
-        let data = store.weeklyVolume()
+        let data = vm.weeklyVolume()
         let total = data.reduce(0.0) { $0 + $1.volume }
 
         return VStack(alignment: .leading, spacing: 12) {
@@ -282,7 +241,7 @@ struct AnalyticsView: View {
     // MARK: - Muscle Focus
 
     private var muscleFocusCard: some View {
-        let focus = store.muscleFocus()
+        let focus = vm.muscleFocus()
         let top   = Array(focus.prefix(5))
 
         return VStack(alignment: .leading, spacing: 12) {
@@ -336,22 +295,14 @@ struct AnalyticsView: View {
     // MARK: - Top Performances
 
     private var topPerformancesCard: some View {
-        let records: [(Date, RepSet)] = store.completedSessions
-            .flatMap { session in
-                session.entries
-                    .filter { $0.exercise == currentExercise }
-                    .flatMap { entry in entry.sets.map { (session.startTime, $0) } }
-            }
-            .sorted { $0.1.volume > $1.1.volume }
-
-        let top5 = Array(records.prefix(5))
+        let top5 = Array(vm.topPerformances.prefix(5))
 
         return VStack(alignment: .leading, spacing: 12) {
             Text("Top Performances")
                 .font(.headline)
 
             if top5.isEmpty {
-                Text("No sets recorded yet for \(currentExercise.displayName)")
+                Text("No sets recorded yet for \(vm.currentExercise.displayName)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
@@ -393,6 +344,7 @@ struct AnalyticsView: View {
 }
 
 #Preview {
+    let store = WorkoutStore.preview
     AnalyticsView()
-        .environment(WorkoutStore())
+        .environment(AnalyticsViewModel(store: store))
 }
